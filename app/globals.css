@@ -1,0 +1,48 @@
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;700;800;900&family=Space+Grotesk:wght@600;700&display=swap');
+
+:root {
+  --neon-red: #ff2a5f;
+  --hot-pink: #ff007f;
+  --cyber-yellow: #ffe600;
+  --lime: #a3ff12;
+  --electric-purple: #7928ca;
+  --ink: #0b0b14;
+  --dark-card: #13141f;
+  --border-thick: 3px solid #000000;
+  --shadow-brutal: 5px 5px 0px #000000;
+  --shadow-brutal-hover: 7px 7px 0px #000000;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background-color: #ffde59;
+  background-image: 
+    radial-gradient(#ff007f 1.2px, transparent 1.2px), 
+    radial-gradient(#13141f 1.2px, #ffde59 1.2px);
+  background-size: 28px 28px;
+  background-position: 0 0, 14px 14px;
+  color: #0b0b14;
+  font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  min-height: 100vh;
+}
+
+button {
+  font-family: inherit;
+  cursor: pointer;
+  transition: transform 0.1s ease, box-shadow 0.1s ease;
+}
+
+button:active {
+  transform: translate(2px, 2px);
+  box-shadow: 2px 2px 0px #000000 !important;
+}
+
+input {
+  font-family: inherit;
+}
