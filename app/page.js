@@ -58,13 +58,21 @@ export default function Home() {
       const data = await res.json();
       
       if (Array.isArray(data.items) && data.items.length > 0) {
-        const newItems = data.items.map((item, idx) => ({
-          id: 'e-' + Date.now() + '-' + idx,
-          emoji: item.emoji || '🧾',
-          name: item.name ? item.name.charAt(0).toUpperCase() + item.name.slice(1) : 'Expense',
-          paidBy: item.paidBy || 'You',
-          amount: Number(item.amount || 0),
-        }));
+        const newItems = data.items.map((item, idx) => {
+          const peopleCount = Number(item.people || 1);
+          const eachAmount = Number(item.each || item.amount);
+          const splitLabel = peopleCount > 1 
+            ? `${item.paidBy || 'You'} · split between ${peopleCount} (${inr(eachAmount)} each)`
+            : `${item.paidBy || 'You'} (just me)`;
+
+          return {
+            id: 'e-' + Date.now() + '-' + idx,
+            emoji: item.emoji || '🧾',
+            name: item.description || item.name || 'Expense',
+            paidBy: splitLabel,
+            amount: Number(item.amount || 0),
+          };
+        });
         setExpenses((list) => [...list, ...newItems]);
       } else if (data.description || data.amount) {
         const newExpense = {

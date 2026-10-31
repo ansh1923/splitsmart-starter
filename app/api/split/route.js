@@ -1,6 +1,62 @@
 import { GoogleGenAI } from '@google/genai';
 import { NextResponse } from 'next/server';
 
+// Robust rule-based fallback that understands human sentences even when offline
+function parseHumanFallback(text) {
+  const t = text.toLowerCase();
+  
+  // 1. Extract total amount
+  const amountMatch = t.match(/(?:for|rs\.?|inr|₹|\$)?\s*(\d[\d,]*(\.\d+)?)/i);
+  const amount = amountMatch ? Number(amountMatch[1].replace(/,/g, '')) : 0;
+
+  // 2. Count people
+  let people = 1;
+  const friendsMatch = t.match(/(\d+)\s+friends?/i);
+  const betweenMatch = t.match(/(?:between|among)\s+(\d+)/i);
+
+  if (friendsMatch) {
+    // "with 2 friends" means speaker + 2 = 3 people
+    people = Number(friendsMatch[1]) + 1;
+  } else if (betweenMatch) {
+    people = Number(betweenMatch[1]);
+  } else if (t.includes('me') && t.includes('and')) {
+    // e.g. "me, raj and priya" -> count commas/and + 1
+    const parts = t.split(/,|and/).map(s => s.trim()).filter(s => s.length > 0);
+    if (parts.length >= 2) people = parts.length;
+  }
+
+  // 3. Extract description
+  let description = 'Expense';
+  if (t.includes('dinner')) description = 'Dinner';
+  else if (t.includes('cab') || t.includes('taxi') || t.includes('uber')) description = 'Cab';
+  else if (t.includes('coffee')) description = 'Coffee';
+  else if (t.includes('pizza')) description = 'Pizza';
+  else if (t.includes('food') || t.includes('lunch')) description = 'Food';
+  else {
+    const cleaned = text.replace(/\d[\d,]*(\.\d+)?/, '').replace(/split with.*/i, '').trim();
+    if (cleaned) description = cleaned;
+  }
+
+  // 4. Emoji
+  let emoji = '🧾';
+  if (/dinner|food|lunch|pizza/i.test(description)) emoji = '🍽️';
+  else if (/cab|taxi|uber/i.test(description)) emoji = '🚕';
+  else if (/coffee|tea|cafe/i.test(description)) emoji = '☕';
+
+  const each = Math.round((amount / people) * 100) / 100;
+
+  return [
+    {
+      description,
+      amount,
+      people,
+      each,
+      paidBy: 'You',
+      emoji,
+    },
+  ];
+}
+
 export async function POST(request) {
   try {
     const { text } = await request.json();
@@ -15,48 +71,49 @@ export async function POST(request) {
     const apiKey = process.env.GEMINI_API_KEY;
 
     if (!apiKey) {
-      const amountMatch = text.match(/\d[\d,]*(\.\d+)?/);
-      const amount = amountMatch ? Number(amountMatch[0].replace(/,/g, '')) : 0;
-      return NextResponse.json({
-        items: [
-          {
-            name: text.replace(/\d[\d,]*(\.\d+)?/, '').trim() || 'Expense',
-            amount,
-            paidBy: 'You',
-            emoji: '🧾',
-          },
-        ],
-      });
+      return NextResponse.json({ items: parseHumanFallback(text) });
     }
 
     const ai = new GoogleGenAI({ apiKey });
 
-    const prompt = `You are an expense parser for a group expense sharing app.
+    const prompt = `You are an expert expense parser for an expense sharing app.
 Analyze the user's sentence:
 "${text}"
 
-Extract all expenses mentioned. A sentence may describe ONE expense or MULTIPLE expenses by different people (e.g., "Aisha paid 300 for food and Raj paid 400 for food").
+Task:
+Understand messy, natural human statements and extract the structured expense split.
 
-Return ONLY a strict JSON object with an "items" array, where each item has:
-- "name": concise description (e.g., "Food", "Cab", "Dinner")
-- "amount": numeric amount paid (e.g., 400)
-- "paidBy": name of the person who paid (e.g., "Aisha", "Raj", or "You" if self/unspecified)
-- "emoji": a single relevant emoji character (e.g. 🍕, 🚕, 🍽️)
+Human language rules to follow strictly:
+1. People count:
+   - "me, raj and priya" = 3 people (me + raj + priya)
+   - "split with 2 friends" = 3 people (speaker + 2 friends)
+   - "coffee 300, just me" = 1 person
+   - "split between 4 people" = 4 people
+   - If unspecified = 1 person
+2. Calculations:
+   - amount: total bill amount as a number
+   - people: total count of people sharing
+   - each: amount divided by people (rounded to 2 decimal places)
+   - description: short title of item (e.g. "Dinner", "Cab", "Coffee")
+   - paidBy: person who paid (default "You" if speaker paid or unspecified)
+   - emoji: matching emoji (e.g. 🍽️, 🚕, ☕, 🍕)
 
-Example:
+Return ONLY valid JSON matching this schema:
 {
   "items": [
-    { "name": "Food", "amount": 300, "paidBy": "Aisha", "emoji": "🍱" },
-    { "name": "Food", "amount": 400, "paidBy": "Raj", "emoji": "🍱" }
+    {
+      "description": "Dinner",
+      "amount": 1200,
+      "people": 3,
+      "each": 400,
+      "paidBy": "You",
+      "emoji": "🍽️"
+    }
   ]
-}
+}`;
 
-Return ONLY JSON. No markdown fences.`;
-
-    // Try primary and fallback models to guarantee responses even during high traffic spikes
     const modelCandidates = ['gemini-flash-latest', 'gemini-3.5-flash', 'gemini-3.8-flash'];
     let response = null;
-    let lastError = null;
 
     for (const model of modelCandidates) {
       try {
@@ -69,13 +126,12 @@ Return ONLY JSON. No markdown fences.`;
         });
         if (response && response.text) break;
       } catch (err) {
-        lastError = err;
-        console.warn(`Model ${model} failed, trying next...:`, err.message);
+        console.warn(`Model ${model} issue:`, err.message);
       }
     }
 
     if (!response || !response.text) {
-      throw lastError || new Error('All AI models unavailable');
+      return NextResponse.json({ items: parseHumanFallback(text) });
     }
 
     const rawOutput = response.text?.trim() || '{}';
@@ -90,23 +146,33 @@ Return ONLY JSON. No markdown fences.`;
       items = parsed.items;
     } else if (Array.isArray(parsed)) {
       items = parsed;
-    } else if (parsed.name || parsed.description || parsed.amount) {
+    } else if (parsed.amount || parsed.description) {
       items = [parsed];
     }
 
-    const formattedItems = items.map((item) => ({
-      name: String(item.name || item.description || 'Expense').trim(),
-      amount: Number(item.amount || 0),
-      paidBy: String(item.paidBy || 'You').trim(),
-      emoji: item.emoji || '🧾',
-    }));
+    if (items.length === 0) {
+      items = parseHumanFallback(text);
+    }
+
+    const formattedItems = items.map((item) => {
+      const amount = Number(item.amount || 0);
+      const people = Math.max(1, Number(item.people || 1));
+      const each = Number(
+        item.each != null ? item.each : Math.round((amount / people) * 100) / 100
+      );
+      return {
+        description: String(item.description || item.name || 'Expense').trim(),
+        amount,
+        people,
+        each,
+        paidBy: String(item.paidBy || 'You').trim(),
+        emoji: item.emoji || '🧾',
+      };
+    });
 
     return NextResponse.json({ items: formattedItems });
   } catch (error) {
     console.error('API /api/split error:', error);
-    return NextResponse.json(
-      { error: error.message || 'Failed to parse expense' },
-      { status: 500 }
-    );
+    return NextResponse.json({ items: parseHumanFallback(text) });
   }
 }
