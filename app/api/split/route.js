@@ -59,7 +59,8 @@ function parseHumanFallback(text) {
 
 export async function POST(request) {
   try {
-    const { text } = await request.json();
+    const body = await request.json();
+    const text = (body.text || body.sentence || '').trim();
 
     if (!text || typeof text !== 'string') {
       return NextResponse.json(
@@ -170,7 +171,16 @@ Return ONLY valid JSON matching this schema:
       };
     });
 
-    return NextResponse.json({ items: formattedItems });
+    const firstItem = formattedItems[0] || {};
+    return NextResponse.json({
+      items: formattedItems,
+      description: firstItem.description || text,
+      amount: firstItem.amount || 0,
+      paidBy: firstItem.paidBy || 'You',
+      emoji: firstItem.emoji || '🧾',
+      people: firstItem.people || 1,
+      each: firstItem.each || 0,
+    });
   } catch (error) {
     console.error('API /api/split error:', error);
     return NextResponse.json({ items: parseHumanFallback(text) });

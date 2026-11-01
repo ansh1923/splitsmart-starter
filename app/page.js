@@ -1,415 +1,154 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-
-const SEED = [
-  { id: 'seed-1', emoji: '🍕', name: 'Late night pizza binge', paidBy: 'Aisha', amount: 1800 },
-  { id: 'seed-2', emoji: '🚖', name: 'Uber ride (no split no party)', paidBy: 'Raj', amount: 400 },
-  { id: 'seed-3', emoji: '🧋', name: 'Boba drip check', paidBy: 'You', amount: 350 },
-];
+import { supabase } from '../lib/supabaseClient';
 
 const inr = (n) => '₹' + Number(n || 0).toLocaleString('en-IN');
 
-function parseExpense(text) {
-  const amountMatch = text.match(/\d[\d,]*(\.\d+)?/);
-  const amount = amountMatch ? Number(amountMatch[0].replace(/,/g, '')) : 0;
-  const name = text.replace(/\d[\d,]*(\.\d+)?/, '').replace(/\s+/g, ' ').trim() || 'Vibe Check Expense';
-  const emojis = ['⚡', '💸', '🔥', '✨', '🍟', '🥤', '🎮', '💅'];
-  const randomEmoji = emojis[Math.floor(Math.random() * emojis.length)];
-  return { id: 'e-' + Date.now(), emoji: randomEmoji, name: name.charAt(0).toUpperCase() + name.slice(1), paidBy: 'You', amount };
-}
-
 export default function Home() {
-  const [expenses, setExpenses] = useState(SEED);
+  const [session, setSession] = useState(null);
+  const [checking, setChecking] = useState(true);
+  const [expenses, setExpenses] = useState([]);
   const [text, setText] = useState('');
-  const [ready, setReady] = useState(false);
-  const [loading, setLoading] = useState(false);
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [authMsg, setAuthMsg] = useState('');
 
   useEffect(() => {
-    try {
-      const saved = localStorage.getItem('splitsmart.expenses');
-      if (saved) setExpenses(JSON.parse(saved));
-    } catch {}
-    setReady(true);
+    supabase.auth.getSession().then(({ data }) => { setSession(data.session); setChecking(false); });
+    const { data: sub } = supabase.auth.onAuthStateChange((_e, s) => setSession(s));
+    return () => sub.subscription.unsubscribe();
   }, []);
 
   useEffect(() => {
-    if (ready) {
-      try { localStorage.setItem('splitsmart.expenses', JSON.stringify(expenses)); } catch {}
-    }
-  }, [expenses, ready]);
+    if (!session) { setExpenses([]); return; }
+    supabase.from('expenses').select('*').order('created_at', { ascending: true })
+      .then(({ data }) => setExpenses(data || []));
+  }, [session]);
+
+  const signUp = async () => {
+    setAuthMsg('');
+    const { error } = await supabase.auth.signUp({ email, password });
+    setAuthMsg(error ? error.message : 'Account created — you are signed in!');
+  };
+  const signIn = async () => {
+    setAuthMsg('');
+    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    if (error) setAuthMsg(error.message);
+  };
+  const signOut = () => supabase.auth.signOut();
 
   const total = expenses.reduce((sum, e) => sum + Number(e.amount || 0), 0);
 
   const addExpense = async () => {
     const t = text.trim();
-    if (!t || loading) return;
-
-    setLoading(true);
+    if (!t) return;
     try {
       const res = await fetch('/api/split', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: t }),
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sentence: t }),
       });
-
-      if (!res.ok) throw new Error('Failed to parse with AI');
-
       const data = await res.json();
-      
-      if (Array.isArray(data.items) && data.items.length > 0) {
-        const newItems = data.items.map((item, idx) => {
-          const peopleCount = Number(item.people || 1);
-          const eachAmount = Number(item.each || item.amount);
-          const splitLabel = peopleCount > 1 
-            ? `${item.paidBy || 'You'} · split between ${peopleCount} (${inr(eachAmount)} each)`
-            : `${item.paidBy || 'You'} (just me)`;
+      if (data.error) { alert('AI error: ' + data.error); return; }
+      const description = data.description || (data.items && data.items[0]?.description) || t;
+      const amount = data.amount ?? (data.items && data.items[0]?.amount) ?? 0;
+      const emoji = data.emoji || (data.items && data.items[0]?.emoji) || '🧾';
+      const paidBy = data.paidBy || (data.items && data.items[0]?.paidBy) || 'You';
 
-          return {
-            id: 'e-' + Date.now() + '-' + idx,
-            emoji: item.emoji || '🧾',
-            name: item.description || item.name || 'Expense',
-            paidBy: splitLabel,
-            amount: Number(item.amount || 0),
-          };
-        });
-        setExpenses((list) => [...list, ...newItems]);
-      } else if (data.description || data.amount) {
-        const newExpense = {
-          id: 'e-' + Date.now(),
-          emoji: '🧾',
-          name: data.description ? data.description.charAt(0).toUpperCase() + data.description.slice(1) : t,
-          paidBy: data.paidBy || (data.people > 1 ? `You (${data.people} ways: ${inr(data.each)} ea)` : 'You'),
-          amount: Number(data.amount || 0),
-        };
-        setExpenses((list) => [...list, newExpense]);
-      }
+      const { data: rows, error } = await supabase.from('expenses')
+        .insert({
+          user_id: session.user.id,
+          name: description,
+          paid_by: paidBy,
+          amount: amount,
+          emoji: emoji,
+        })
+        .select();
+      if (error) { alert('Save error: ' + error.message); return; }
+      setExpenses((list) => [...list, rows[0]]);
       setText('');
-    } catch (err) {
-      console.warn('AI parse failed, using fallback:', err);
-      setExpenses((list) => [...list, parseExpense(t)]);
-      setText('');
-    } finally {
-      setLoading(false);
-    }
+    } catch (e) { alert('Could not add: ' + e.message); }
   };
 
-  const removeExpense = (id) => setExpenses((list) => list.filter((e) => e.id !== id));
+  const removeExpense = async (id) => {
+    await supabase.from('expenses').delete().eq('id', id);
+    setExpenses((list) => list.filter((e) => e.id !== id));
+  };
+
+  if (checking) return <main style={styles.page}><div style={styles.card}>Loading…</div></main>;
+
+  if (!session) {
+    return (
+      <main style={styles.page}>
+        <div style={styles.card}>
+          <div style={styles.header}><div style={styles.brand}><div style={styles.logo}>S</div><div style={styles.title}>SplitSmart</div></div></div>
+          <p style={{ color: '#6b7280', fontSize: 14, marginBottom: 16 }}>Sign in to see your expenses on any device.</p>
+          <input style={styles.input2} type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email" />
+          <input style={styles.input2} type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Password (6+ characters)" />
+          <div style={{ display: 'flex', gap: 10, marginTop: 6 }}>
+            <button style={styles.authBtn} onClick={signUp}>Sign up</button>
+            <button style={styles.authBtnAlt} onClick={signIn}>Sign in</button>
+          </div>
+          {authMsg && <div style={{ marginTop: 12, fontSize: 13, color: '#1C5FD4' }}>{authMsg}</div>}
+        </div>
+      </main>
+    );
+  }
 
   return (
     <main style={styles.page}>
-      {/* Top Banner Tag */}
-      <div style={styles.topBadge}>
-        <span>🔥 NO CAP EXPENSE MANAGER 🔥</span>
-      </div>
-
       <div style={styles.card}>
-        {/* Header */}
         <div style={styles.header}>
-          <div style={styles.brand}>
-            <div style={styles.logo}>💥</div>
-            <h1 style={styles.title}>Ansh&apos;s Tu Tera Main Mera Expense Tracker</h1>
-          </div>
-          <div style={styles.groupPill}>✨ Da Squad ✨</div>
+          <div style={styles.brand}><div style={styles.logo}>S</div><div style={styles.title}>SplitSmart</div></div>
+          <button style={styles.signout} onClick={signOut}>Sign out</button>
         </div>
-
-        {/* Input Bar */}
         <div style={styles.addRow}>
-          <input
-            style={styles.input}
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && addExpense()}
-            placeholder={loading ? 'Gemini AI is cooking... 🤖' : 'Drop expense e.g. Dinner 1200 split with 3... 👀'}
-            disabled={loading}
-            aria-label="Add an expense"
-          />
-          <button
-            style={{
-              ...styles.addBtn,
-              opacity: loading ? 0.7 : 1,
-              cursor: loading ? 'not-allowed' : 'pointer',
-            }}
-            onClick={addExpense}
-            disabled={loading}
-            aria-label="Understand Statement"
-          >
-            {loading ? 'AI Thinking... ✨' : 'Understand Statement ⚡'}
-          </button>
+          <input style={styles.input} value={text} onChange={(e) => setText(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && addExpense()} placeholder="Add an expense…" />
+          <button style={styles.addBtn} onClick={addExpense}>+</button>
         </div>
-
-        {/* Expense list */}
         <div style={styles.list}>
-          {expenses.length === 0 && (
-            <div style={styles.empty}>
-              Ghost town fr 💀 Add some bills above!
-            </div>
-          )}
+          {expenses.length === 0 && <div style={styles.empty}>No expenses yet — add your first one above.</div>}
           {expenses.map((e) => (
             <div key={e.id} style={styles.item}>
-              <div style={styles.itemEmoji}>{e.emoji}</div>
+              <div style={styles.itemEmoji}>{e.emoji || '🧾'}</div>
               <div style={styles.itemMain}>
                 <div style={styles.itemName}>{e.name}</div>
-                <div style={styles.itemPaid}>
-                  paid by <span style={styles.paidHighlight}>{e.paidBy}</span>
-                </div>
+                <div style={styles.itemPaid}>paid by {e.paid_by}</div>
               </div>
               <div style={styles.itemAmount}>{inr(e.amount)}</div>
-              <button
-                style={styles.remove}
-                onClick={() => removeExpense(e.id)}
-                aria-label={`Remove ${e.name}`}
-              >
-                ✕
-              </button>
+              <button style={styles.remove} onClick={() => removeExpense(e.id)}>×</button>
             </div>
           ))}
         </div>
-
-        {/* Total Box */}
-        <div style={styles.totalBox}>
-          <span style={styles.totalLabel}>DAMAGE SO FAR 💸</span>
-          <span style={styles.totalVal}>{inr(total)}</span>
-        </div>
+        <div style={styles.total}>Total {inr(total)}</div>
       </div>
-
-      <p style={styles.footnote}>
-        Tu Tera Main Mera · Zero drama splits only 💅<br />
-        Built with high energy &amp; pure vibes.
-      </p>
     </main>
   );
 }
 
 const styles = {
-  page: {
-    minHeight: '100vh',
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-    justifyContent: 'flex-start',
-    padding: '32px 16px 56px',
-  },
-  topBadge: {
-    background: '#000',
-    color: '#a3ff12',
-    fontWeight: 900,
-    fontSize: 13,
-    letterSpacing: '0.12em',
-    padding: '6px 18px',
-    borderRadius: 999,
-    border: '2px solid #000',
-    boxShadow: '3px 3px 0px #000',
-    marginBottom: 16,
-    textTransform: 'uppercase',
-  },
-  card: {
-    width: '100%',
-    maxWidth: 540,
-    background: '#ffffff',
-    borderRadius: 24,
-    border: '3px solid #000000',
-    boxShadow: '8px 8px 0px #000000',
-    padding: '24px 22px',
-    position: 'relative',
-  },
-  header: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: 12,
-    marginBottom: 20,
-    borderBottom: '3px dashed #000',
-    paddingBottom: 18,
-  },
-  brand: {
-    display: 'flex',
-    alignItems: 'flex-start',
-    gap: 12,
-  },
-  logo: {
-    width: 46,
-    height: 46,
-    borderRadius: 14,
-    display: 'grid',
-    placeItems: 'center',
-    fontSize: 24,
-    background: '#ffe600',
-    border: '3px solid #000',
-    boxShadow: '3px 3px 0px #000',
-    flexShrink: 0,
-    transform: 'rotate(-4deg)',
-  },
-  title: {
-    fontSize: 24,
-    fontWeight: 900,
-    color: '#ff2247',
-    margin: 0,
-    lineHeight: 1.2,
-    letterSpacing: '-0.02em',
-    textTransform: 'uppercase',
-    textShadow: '1px 1px 0px #000',
-  },
-  groupPill: {
-    alignSelf: 'flex-start',
-    fontSize: 12,
-    fontWeight: 900,
-    color: '#000',
-    background: '#a3ff12',
-    padding: '6px 14px',
-    borderRadius: 999,
-    border: '2px solid #000',
-    boxShadow: '2px 2px 0px #000',
-    letterSpacing: '0.04em',
-    textTransform: 'uppercase',
-  },
-  addRow: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: 12,
-    marginBottom: 20,
-  },
-  input: {
-    width: '100%',
-    border: '3px solid #000000',
-    borderRadius: 16,
-    padding: '14px 16px',
-    fontSize: 15,
-    fontWeight: 700,
-    outline: 'none',
-    background: '#fff',
-    color: '#000',
-    boxShadow: '3px 3px 0px #000',
-    boxSizing: 'border-box',
-  },
-  addBtn: {
-    width: '100%',
-    padding: '14px 20px',
-    borderRadius: 16,
-    border: '3px solid #000000',
-    color: '#000',
-    fontSize: 15,
-    fontWeight: 900,
-    background: '#ffe600',
-    boxShadow: '4px 4px 0px #000000',
-    letterSpacing: '0.04em',
-    textTransform: 'uppercase',
-    textAlign: 'center',
-  },
-  list: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: 12,
-    minHeight: 60,
-  },
-  empty: {
-    color: '#000',
-    fontWeight: 800,
-    fontSize: 15,
-    textAlign: 'center',
-    padding: '30px 12px',
-    background: '#f4f4f4',
-    border: '2px dashed #000',
-    borderRadius: 16,
-  },
-  item: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: 12,
-    background: '#ffffff',
-    border: '3px solid #000000',
-    borderRadius: 18,
-    padding: '12px 14px',
-    boxShadow: '4px 4px 0px #000000',
-    transition: 'transform 0.15s ease',
-  },
-  itemEmoji: {
-    width: 44,
-    height: 44,
-    borderRadius: 12,
-    display: 'grid',
-    placeItems: 'center',
-    background: '#ffd6e0',
-    border: '2px solid #000',
-    fontSize: 22,
-    flexShrink: 0,
-  },
-  itemMain: {
-    flex: 1,
-    minWidth: 0,
-  },
-  itemName: {
-    fontWeight: 800,
-    fontSize: 15,
-    color: '#000',
-    lineHeight: 1.3,
-  },
-  itemPaid: {
-    color: '#555',
-    fontSize: 12,
-    fontWeight: 700,
-    marginTop: 2,
-  },
-  paidHighlight: {
-    color: '#7928ca',
-    fontWeight: 900,
-    textDecoration: 'underline',
-  },
-  itemAmount: {
-    fontWeight: 900,
-    fontSize: 17,
-    color: '#000',
-    fontVariantNumeric: 'tabular-nums',
-  },
-  remove: {
-    flex: 'none',
-    width: 30,
-    height: 30,
-    borderRadius: 10,
-    border: '2px solid #000',
-    background: '#ff2a5f',
-    color: '#fff',
-    fontSize: 14,
-    fontWeight: 900,
-    lineHeight: 1,
-    display: 'grid',
-    placeItems: 'center',
-    boxShadow: '2px 2px 0px #000',
-  },
-  totalBox: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginTop: 22,
-    padding: '16px 20px',
-    border: '3px solid #000000',
-    borderRadius: 18,
-    background: '#a3ff12',
-    boxShadow: '5px 5px 0px #000000',
-  },
-  totalLabel: {
-    fontWeight: 900,
-    fontSize: 14,
-    color: '#000',
-    letterSpacing: '0.04em',
-  },
-  totalVal: {
-    fontWeight: 900,
-    fontSize: 22,
-    color: '#000',
-    fontVariantNumeric: 'tabular-nums',
-  },
-  footnote: {
-    color: '#000',
-    fontWeight: 800,
-    fontSize: 13,
-    textAlign: 'center',
-    lineHeight: 1.6,
-    marginTop: 24,
-    maxWidth: 420,
-    background: 'rgba(255, 255, 255, 0.85)',
-    padding: '8px 16px',
-    borderRadius: 12,
-    border: '2px solid #000',
-    boxShadow: '3px 3px 0px #000',
-  },
+  page: { minHeight: '100vh', display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '28px 16px 48px' },
+  card: { width: '100%', maxWidth: 420, background: 'var(--card)', borderRadius: 24, boxShadow: '0 24px 60px -24px rgba(13,27,62,.28)', border: '1px solid var(--line)', padding: 20, marginTop: 12 },
+  header: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 18 },
+  brand: { display: 'flex', alignItems: 'center', gap: 10 },
+  logo: { width: 36, height: 36, borderRadius: 11, display: 'grid', placeItems: 'center', color: '#fff', fontWeight: 800, fontSize: 18, background: 'linear-gradient(135deg, var(--blue), var(--cyan))' },
+  title: { fontSize: 20, fontWeight: 800 },
+  signout: { border: '1px solid var(--line)', background: '#fff', borderRadius: 10, padding: '7px 13px', fontSize: 13, fontWeight: 700, color: 'var(--muted)', cursor: 'pointer' },
+  addRow: { display: 'flex', gap: 10, marginBottom: 16 },
+  input: { flex: 1, border: '1px solid var(--line)', borderRadius: 14, padding: '13px 15px', fontSize: 15, outline: 'none', background: '#f7f9fc' },
+  input2: { width: '100%', border: '1px solid var(--line)', borderRadius: 12, padding: '12px 14px', fontSize: 15, outline: 'none', background: '#f7f9fc', marginBottom: 10, boxSizing: 'border-box' },
+  authBtn: { flex: 1, border: 'none', borderRadius: 12, padding: '12px', color: '#fff', fontSize: 15, fontWeight: 800, background: 'linear-gradient(135deg, var(--blue), var(--cyan))', cursor: 'pointer' },
+  authBtnAlt: { flex: 1, border: '1px solid var(--line)', borderRadius: 12, padding: '12px', color: 'var(--ink)', fontSize: 15, fontWeight: 800, background: '#fff', cursor: 'pointer' },
+  addBtn: { flex: 'none', width: 48, borderRadius: 14, border: 'none', color: '#fff', fontSize: 24, fontWeight: 700, background: 'linear-gradient(135deg, var(--blue), var(--cyan))', cursor: 'pointer' },
+  list: { display: 'flex', flexDirection: 'column', gap: 10, minHeight: 60 },
+  empty: { color: 'var(--muted)', fontSize: 14, textAlign: 'center', padding: '24px 0' },
+  item: { display: 'flex', alignItems: 'center', gap: 12, background: '#f7f9fc', border: '1px solid var(--line)', borderRadius: 16, padding: '12px 14px' },
+  itemEmoji: { width: 38, height: 38, borderRadius: 11, display: 'grid', placeItems: 'center', background: '#fff', border: '1px solid var(--line)', fontSize: 19, flex: 'none' },
+  itemMain: { flex: 1, minWidth: 0 },
+  itemName: { fontWeight: 700, fontSize: 15 },
+  itemPaid: { color: 'var(--muted)', fontSize: 12.5, marginTop: 1 },
+  itemAmount: { fontWeight: 800, fontSize: 15.5 },
+  remove: { flex: 'none', width: 26, height: 26, borderRadius: 8, border: 'none', background: 'transparent', color: 'var(--muted)', fontSize: 20, cursor: 'pointer' },
+  total: { textAlign: 'center', marginTop: 20, paddingTop: 16, borderTop: '1px solid var(--line)', fontWeight: 800, fontSize: 16 },
 };
