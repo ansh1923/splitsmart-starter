@@ -14,6 +14,7 @@ export default function Home() {
   const [loadingExpenses, setLoadingExpenses] = useState(false);
   const [text, setText] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [clearing, setClearing] = useState(false);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [authMsg, setAuthMsg] = useState('');
@@ -184,6 +185,28 @@ export default function Home() {
     }
   };
 
+  const clearAllExpenses = async () => {
+    if (!groupId || expenses.length === 0 || clearing) return;
+    const confirmClear = window.confirm('Are you sure you want to clear all expenses for this group?');
+    if (!confirmClear) return;
+
+    setClearing(true);
+    setErrorMessage('');
+    try {
+      const { error } = await supabase
+        .from('expenses')
+        .delete()
+        .eq('group_id', groupId);
+
+      if (error) throw error;
+      setExpenses([]);
+    } catch (err) {
+      setErrorMessage('Could not clear expenses: ' + err.message);
+    } finally {
+      setClearing(false);
+    }
+  };
+
   if (checking) {
     return (
       <main style={styles.page}>
@@ -275,8 +298,23 @@ export default function Home() {
         </div>
 
         {currentGroup && (
-          <div style={styles.codeLine}>
-            Invite Code: <b style={styles.codeHighlight}>{currentGroup.join_code}</b>
+          <div style={styles.groupMetaBar}>
+            <div style={styles.codeLine}>
+              Invite Code: <b style={styles.codeHighlight}>{currentGroup.join_code}</b>
+            </div>
+            {expenses.length > 0 && (
+              <button
+                style={{
+                  ...styles.clearBtn,
+                  ...(clearing ? styles.clearBtnDisabled : {}),
+                }}
+                onClick={clearAllExpenses}
+                disabled={clearing}
+                title="Delete all expenses in this group"
+              >
+                {clearing ? 'Clearing…' : '🗑️ Clear all'}
+              </button>
+            )}
           </div>
         )}
 
@@ -346,33 +384,49 @@ export default function Home() {
         )}
       </div>
 
-      {/* Pinned Mobile-First Bottom Bar */}
+      {/* Pinned Mobile-First Bottom Bar with Est Time & AI Thinking State */}
       {groupId && (
         <div style={styles.bottomBar}>
-          <div style={styles.bottomBarInner}>
-            <input
-              style={styles.bottomInput}
-              value={text}
-              disabled={submitting}
-              onChange={(e) => setText(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && addExpense()}
-              placeholder={submitting ? 'AI is thinking & recording…' : 'e.g. Ansh paid ₹600 for pizza'}
-            />
-            <button
-              style={{
-                ...styles.bottomBtn,
-                ...(submitting ? styles.bottomBtnDisabled : {}),
-              }}
-              onClick={addExpense}
-              disabled={submitting}
-              aria-label="Add expense"
-            >
+          <div style={styles.bottomBarContainer}>
+            {/* Live AI Status and Estimated Time Label */}
+            <div style={styles.aiStatusLabel}>
               {submitting ? (
-                <span className="spinner" />
+                <span style={styles.aiStatusActive}>
+                  ⚡ AI parsing & recording… (takes ~1-2 sec)
+                </span>
               ) : (
-                <span style={{ fontSize: 26, lineHeight: 1 }}>+</span>
+                <span style={styles.aiStatusIdle}>
+                  💡 AI Split Ready · Est. speed ~1-2s
+                </span>
               )}
-            </button>
+            </div>
+
+            <div style={styles.bottomBarInner}>
+              <input
+                style={styles.bottomInput}
+                value={text}
+                disabled={submitting}
+                onChange={(e) => setText(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && addExpense()}
+                placeholder={submitting ? 'AI is thinking & recording…' : 'e.g. Ansh paid ₹600 for pizza'}
+              />
+              <button
+                style={{
+                  ...styles.bottomBtn,
+                  ...(submitting ? styles.bottomBtnDisabled : {}),
+                }}
+                onClick={addExpense}
+                disabled={submitting}
+                aria-label="Add expense"
+                title={submitting ? 'AI is thinking…' : 'Add expense'}
+              >
+                {submitting ? (
+                  <span className="spinner" />
+                ) : (
+                  <span style={{ fontSize: 26, lineHeight: 1 }}>+</span>
+                )}
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -387,7 +441,7 @@ const styles = {
     display: 'flex',
     flexDirection: 'column',
     alignItems: 'center',
-    padding: '16px 12px 100px', // Extra bottom space so bottom bar never covers items
+    padding: '16px 12px 115px', // comfortable bottom clearance for bottom bar + label
     boxSizing: 'border-box',
     overflowX: 'hidden',
   },
@@ -489,20 +543,47 @@ const styles = {
     justifyContent: 'center',
     boxShadow: '2px 2px 0px #000',
   },
+  groupMetaBar: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 14,
+    gap: 10,
+    flexWrap: 'wrap',
+  },
   codeLine: {
     fontSize: 13,
     color: '#4b5563',
-    marginBottom: 14,
     padding: '6px 10px',
     background: '#f3f4f6',
     borderRadius: 8,
-    display: 'inline-block',
+    display: 'inline-flex',
+    alignItems: 'center',
   },
   codeHighlight: {
     color: '#7928ca',
     letterSpacing: '1px',
     fontFamily: 'monospace',
     fontSize: 14,
+    marginLeft: 4,
+  },
+  clearBtn: {
+    minHeight: 36,
+    border: '1.5px solid #ef4444',
+    background: '#fef2f2',
+    color: '#b91c1c',
+    borderRadius: 10,
+    padding: '0 12px',
+    fontSize: 12.5,
+    fontWeight: 800,
+    cursor: 'pointer',
+    display: 'flex',
+    alignItems: 'center',
+    gap: 4,
+  },
+  clearBtnDisabled: {
+    opacity: 0.5,
+    cursor: 'not-allowed',
   },
   errorBanner: {
     display: 'flex',
@@ -691,15 +772,36 @@ const styles = {
     background: 'rgba(255, 255, 255, 0.96)',
     backdropFilter: 'blur(10px)',
     borderTop: '2px solid #0b0b14',
-    padding: '10px 14px calc(10px + env(safe-area-inset-bottom, 0px))',
+    padding: '8px 14px calc(10px + env(safe-area-inset-bottom, 0px))',
     boxShadow: '0 -6px 20px rgba(0, 0, 0, 0.08)',
     zIndex: 100,
     display: 'flex',
     justifyContent: 'center',
   },
-  bottomBarInner: {
+  bottomBarContainer: {
     width: '100%',
     maxWidth: 480,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 6,
+  },
+  aiStatusLabel: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    fontSize: 12,
+    fontWeight: 700,
+    padding: '0 2px',
+  },
+  aiStatusIdle: {
+    color: '#6b7280',
+  },
+  aiStatusActive: {
+    color: '#7928ca',
+    fontWeight: 800,
+  },
+  bottomBarInner: {
+    width: '100%',
     display: 'flex',
     gap: 8,
     alignItems: 'center',
@@ -733,7 +835,7 @@ const styles = {
     transition: 'all 0.15s ease',
   },
   bottomBtnDisabled: {
-    opacity: 0.6,
+    opacity: 0.5,
     cursor: 'not-allowed',
     transform: 'none !important',
   },
