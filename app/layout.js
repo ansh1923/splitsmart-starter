@@ -1,8 +1,8 @@
 import './globals.css';
 
 export const metadata = {
-  title: "Ansh's Tu Tera Main Mera Expense Tracker",
-  description: 'Tu tera dekh, main mera dekhta hu — Gen Z expense splitter.',
+  title: "Ansh TTMM SplitSmart",
+  description: 'Ansh TTMM SplitSmart — Tu tera dekh, main mera dekhta hu.',
 };
 
 export const viewport = {
